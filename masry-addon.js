@@ -115,7 +115,7 @@ module.exports = function installMasryAddon({ app, client, mongoose, checkAuth, 
     if (!newMessage.guild || oldMessage.content === newMessage.content || newMessage.author?.bot) return;
     await enhancedLog(newMessage.guild, 'messages', 'تعديل رسالة', 0xf59e0b, [{ name: 'الكاتب', value: newMessage.author ? `<@${newMessage.author.id}>` : 'غير معروف' }, { name: 'القناة', value: `<#${newMessage.channel.id}>` }, { name: 'قبل التعديل', value: oldMessage.content || 'فارغ' }, { name: 'بعد التعديل', value: newMessage.content || 'فارغ' }], { icon: '✎', url: newMessage.url });
   });
-  client.on('guildMemberAdd', async member => enhancedLog(member.guild, 'members', 'دخول عضو', 0x22c55e, [{ name: 'العضو', value: `<@${member.id}>`, inline: true }, { name: 'عمر الحساب', value: `<t:${Math.floor(member.user.createdTimestamp / 1000)}:R>`, inline: true }], { icon: '↗' }));
+  client.on('guildMemberAdd', async member => enhancedLog(member.guild, 'members', 'دخول عضو', 0x22c55e, [{ name: 'العضو', value: `<@${member.id}>`, inline: true }, { name: 'عمر الحساب', value: ``, inline: true }], { icon: '↗' }));
   client.on('guildMemberRemove', async member => enhancedLog(member.guild, 'members', 'خروج عضو', 0xf97316, [{ name: 'العضو', value: `${member.user?.tag || member.id}` }, { name: 'الرتب السابقة', value: member.roles?.cache?.filter(r => r.id !== member.guild.id).map(r => r.name).join(', ') || 'لا يوجد' }], { icon: '↙' }));
   client.on('channelCreate', async channel => channel.guild && enhancedLog(channel.guild, 'channels', 'إنشاء قناة', 0x22c55e, [{ name: 'القناة', value: `<#${channel.id}>` }, { name: 'النوع', value: String(channel.type) }], { icon: '＋' }));
   client.on('channelDelete', async channel => channel.guild && enhancedLog(channel.guild, 'channels', 'حذف قناة', 0xef4444, [{ name: 'اسم القناة', value: channel.name }, { name: 'المعرّف', value: channel.id }], { icon: '−' }));
@@ -146,23 +146,44 @@ module.exports = function installMasryAddon({ app, client, mongoose, checkAuth, 
     }
     if (interaction.commandName === 'language') { const localeValue = interaction.options.getString('locale'); await LanguageConfig.findOneAndUpdate({ guildId: interaction.guild.id }, { $set: { locale: localeValue } }, { upsert: true }); return interaction.reply({ content: `${flags[localeValue]} تم تغيير لغة البوت إلى **${localeName[localeValue]}**.`, ephemeral: true }); }
     if (interaction.commandName === 'server-info') { return interaction.reply({ embeds: [new EmbedBuilder().setTitle(`معلومات ${interaction.guild.name}`).setColor(0x38bdf8).setThumbnail(interaction.guild.iconURL({ extension: 'png' })).addFields({ name: 'الأعضاء', value: String(interaction.guild.memberCount), inline: true }, { name: 'القنوات', value: String(interaction.guild.channels.cache.size), inline: true }, { name: 'الرتب', value: String(interaction.guild.roles.cache.size), inline: true }, { name: 'البوستات', value: String(interaction.guild.premiumSubscriptionCount || 0), inline: true }).setTimestamp()] }); }
-    if (interaction.commandName === 'user-history') { const user = interaction.options.getUser('user'); const warns = await mongoose.models.Warn?.find({ guildId: interaction.guild.id, userId: user.id }).sort({ createdAt: -1 }).limit(10) || []; return interaction.reply({ embeds: [new EmbedBuilder().setTitle(`السجل الإداري • ${user.tag}`).setColor(warns.length ? 0xef4444 : 0x22c55e).setDescription(warns.length ? warns.map((w, i) => `${i + 1}. ${w.reason || 'بدون سبب'} — <t:${Math.floor(new Date(w.createdAt).getTime() / 1000)}:R>`).join('\n') : 'لا توجد تحذيرات مسجلة.').setTimestamp()], ephemeral: true }); }
+    if (interaction.commandName === 'user-history') { const user = interaction.options.getUser('user'); const warns = await mongoose.models.Warn?.find({ guildId: interaction.guild.id, userId: user.id }).sort({ createdAt: -1 }).limit(10) || []; return interaction.reply({ embeds: [new EmbedBuilder().setTitle(`السجل الإداري • ${user.tag}`).setColor(warns.length ? 0xef4444 : 0x22c55e).setDescription(warns.length ? warns.map((w, i) => `${i + 1}. ${w.reason || 'بدون سبب'} — `).join('\n') : 'لا توجد تحذيرات مسجلة.').setTimestamp()], ephemeral: true }); }
   });
 
   // Dashboard: Boost settings.
   app.get('/manage/:guildId/boost', checkAuth, async (req, res) => {
     const guild = client.guilds.cache.get(req.params.guildId); if (!guild) return res.redirect('/dashboard');
     const cfg = await BoostConfig.findOne({ guildId: guild.id }) || {};
-    const channels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).map(c => `<option value="${c.id}" ${cfg.channelId === c.id ? 'selected' : ''}>#${c.name}</option>`).join('');
-    const content = `<div class="hero-card"><span class="hero-kicker">💜 MASRY BOOST</span><h1>الشكر والتقدير</h1><p>صمّم رسالة احترافية تظهر تلقائياً لكل شخص يدعم السيرفر.</p></div><div class="card"><h3>إعدادات رسالة الـ Boost</h3><form method="POST" action="/save/${guild.id}/boost"><label>قناة الشكر</label><select name="channelId" required>${channels}</select><label>الإيموجي</label><input name="emoji" value="${cfg.emoji || '💜'}" maxlength="8"><label>لون الرسالة</label><input name="color" value="${cfg.color || '#8b5cf6'}" type="color"><label>العنوان</label><input name="title" value="${cfg.title || ''}" maxlength="256"><label>النص</label><textarea name="description">${cfg.description || ''}</textarea><label>التذييل</label><input name="footer" value="${cfg.footer || ''}"><button class="btn-save" type="submit">حفظ وتفعيل النظام</button></form></div>`;
+    const channels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).map(c => `#${c.name}`).join('');
+    const content = `
+💜 MASRY BOOST
+الشكر والتقدير
+صمّم رسالة احترافية تظهر تلقائياً لكل شخص يدعم السيرفر.
+إعدادات رسالة الـ Boost
+قناة الشكر${channels}الإيموجي${cfg.emoji || '💜'} لون الرسالة${cfg.color || '#8b5cf6'} العنوان${cfg.title || ''} النص${cfg.description || ''}التذييل${cfg.footer || ''} حفظ وتفعيل النظام
+`;
     res.send(ui(guild, 'boost', content));
   });
   app.post('/save/:guildId/boost', checkAuth, async (req, res) => { const guild = client.guilds.cache.get(req.params.guildId); if (!guild) return res.redirect('/dashboard'); await BoostConfig.findOneAndUpdate({ guildId: guild.id }, { $set: { guildId: guild.id, enabled: true, channelId: req.body.channelId, emoji: req.body.emoji || '💜', color: req.body.color || '#8b5cf6', title: req.body.title || '', description: req.body.description || '', footer: req.body.footer || '' } }, { upsert: true }); res.redirect(`/manage/${guild.id}/boost?saved=1`); });
 
-  app.get('/manage/:guildId/language', checkAuth, async (req, res) => { const guild = client.guilds.cache.get(req.params.guildId); if (!guild) return res.redirect('/dashboard'); const current = await getLocale(guild.id); const options = Object.entries(localeName).map(([id, name]) => `<option value="${id}" ${current === id ? 'selected' : ''}>${flags[id]} ${name}</option>`).join(''); const content = `<div class="hero-card"><span class="hero-kicker">🌐 MASRY LANGUAGE</span><h1>لغة البوت</h1><p>اختر اللغة التي تظهر بها رسائل البوت واللوحات داخل السيرفر.</p></div><div class="card"><h3>اختيار اللغة</h3><form method="POST" action="/save/${guild.id}/language"><select name="locale">${options}</select><button class="btn-save" type="submit">حفظ اللغة</button></form></div>`; res.send(ui(guild, 'language', content)); });
+  app.get('/manage/:guildId/language', checkAuth, async (req, res) => { const guild = client.guilds.cache.get(req.params.guildId); if (!guild) return res.redirect('/dashboard'); const current = await getLocale(guild.id); const options = Object.entries(localeName).map(([id, name]) => `${flags[id]} ${name}`).join(''); const content = `
+🌐 MASRY LANGUAGE
+لغة البوت
+اختر اللغة التي تظهر بها رسائل البوت واللوحات داخل السيرفر.
+اختيار اللغة
+${options}حفظ اللغة
+`; res.send(ui(guild, 'language', content)); });
   app.post('/save/:guildId/language', checkAuth, async (req, res) => { const guild = client.guilds.cache.get(req.params.guildId); if (!guild) return res.redirect('/dashboard'); const locale = dictionaries[req.body.locale] ? req.body.locale : 'ar'; await LanguageConfig.findOneAndUpdate({ guildId: guild.id }, { $set: { guildId: guild.id, locale } }, { upsert: true }); res.redirect(`/manage/${guild.id}/language?saved=1`); });
 
-  app.get('/manage/:guildId/log-center', checkAuth, async (req, res) => { const guild = client.guilds.cache.get(req.params.guildId); if (!guild) return res.redirect('/dashboard'); const cfg = await LogConfig.findOne({ guildId: guild.id }) || {}; const channels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).map(c => `<option value="${c.id}" ${cfg.channelId === c.id ? 'selected' : ''}>#${c.name}</option>`).join(''); const content = `<div class="hero-card"><span class="hero-kicker">◈ MASRY AUDIT CORE</span><h1>مركز السجلات</h1><p>كل تعديل، حذف، رتبة، قناة، عضو، دعم، وتغيير صوتي في مكان واحد.</p></div><div class="card"><h3>إعدادات السجل المتقدم</h3><form method="POST" action="/save/${guild.id}/log-center"><label>قناة السجلات</label><select name="channelId" required>${channels}</select><div class="toggle-row"><label>إظهار محتوى الرسائل</label><input type="checkbox" name="includeContent" ${cfg.includeContent !== false ? 'checked' : ''}></div><div class="toggle-row"><label>تجميع عمليات الحذف المتكررة</label><input type="checkbox" name="batchDeletes" ${cfg.batchDeletes !== false ? 'checked' : ''}></div><button class="btn-save" type="submit">حفظ إعدادات السجل</button></form></div>`; res.send(ui(guild, 'log-center', content)); });
+  app.get('/manage/:guildId/log-center', checkAuth, async (req, res) => { const guild = client.guilds.cache.get(req.params.guildId); if (!guild) return res.redirect('/dashboard'); const cfg = await LogConfig.findOne({ guildId: guild.id }) || {}; const channels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText).map(c => `#${c.name}`).join(''); const content = `
+◈ MASRY AUDIT CORE
+مركز السجلات
+كل تعديل، حذف، رتبة، قناة، عضو، دعم، وتغيير صوتي في مكان واحد.
+إعدادات السجل المتقدم
+قناة السجلات${channels}
+إظهار محتوى الرسائل 
+تجميع عمليات الحذف المتكررة 
+حفظ إعدادات السجل
+`; res.send(ui(guild, 'log-center', content)); });
   app.post('/save/:guildId/log-center', checkAuth, async (req, res) => { const guild = client.guilds.cache.get(req.params.guildId); if (!guild) return res.redirect('/dashboard'); await LogConfig.findOneAndUpdate({ guildId: guild.id }, { $set: { guildId: guild.id, enabled: true, channelId: req.body.channelId, includeContent: req.body.includeContent === 'on', batchDeletes: req.body.batchDeletes === 'on' } }, { upsert: true }); res.redirect(`/manage/${guild.id}/log-center?saved=1`); });
 
   console.log('[Masry Bot] Enhanced addon loaded: boost, i18n, slash, audit logs.');
