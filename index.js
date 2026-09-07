@@ -8,6 +8,7 @@ const { createCanvas, loadImage } = require('canvas');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const axios = require('axios');
 const ms = require('ms');
 const {
@@ -58,9 +59,13 @@ const TicketData = mongoose.model('TicketData', new mongoose.Schema({
     adminRole: String,
     categoryId: String,
     claimedBy: String,
+    claimedByName: { type: String, default: '' },
+    claimedAt: Date,
     openedAt: Date,
     closedAt: Date,
     closedBy: String,
+    closedByName: { type: String, default: '' },
+    ownerName: { type: String, default: '' },
     request: { type: String, default: '' },
     credits: { type: String, default: '' },
     rating: { type: Number, default: null },
@@ -69,7 +74,19 @@ const TicketData = mongoose.model('TicketData', new mongoose.Schema({
     soldProduct: { type: String, default: '' },
     soldPrice: { type: String, default: '' },
     ratingMessageId: { type: String, default: '' },
-    saleMessageId: { type: String, default: '' }
+    saleMessageId: { type: String, default: '' },
+    transcriptToken: { type: String, default: '' },
+    transcriptMessages: [{
+        messageId: String,
+        authorId: String,
+        authorName: String,
+        authorDisplayName: String,
+        avatarUrl: String,
+        content: String,
+        createdAt: Date,
+        attachments: [{ name: String, url: String }],
+        embeds: [{ title: String, description: String, url: String, color: String }]
+    }]
 }));
 
 const UserLevel = mongoose.model('UserLevel', new mongoose.Schema({
@@ -767,6 +784,34 @@ body{margin:0;min-height:100vh;background:var(--ink);color:var(--text);font-fami
 
 app.get('/ping', (req, res) => res.send('I am alive!'));
 app.get('/', (req, res) => res.redirect('/dashboard'));
+
+// ==========================================
+// Public Ticket Transcript
+// ==========================================
+app.get('/ticket-transcript/:token', async (req, res) => {
+    try {
+        const ticket = await TicketData.findOne({ transcriptToken: req.params.token }).lean();
+        if (!ticket) return res.status(404).send('<h1 style="font-family:Arial;text-align:center;margin-top:80px">Transcript غير موجود أو انتهت صلاحيته.</h1>');
+        const messages = Array.isArray(ticket.transcriptMessages) ? ticket.transcriptMessages : [];
+        const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[ch]));
+        const fmt = value => new Date(value).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
+        const messageHtml = messages.map(message => {
+            const avatar = esc(message.avatarUrl || 'https://cdn.discordapp.com/embed/avatars/0.png');
+            const author = esc(message.authorDisplayName || message.authorName || 'عضو');
+            const content = esc(message.content || '').replace(/\n/g, '<br>');
+            const attachments = (message.attachments || []).map(file => `<a class="attachment" href="${esc(file.url)}" target="_blank" rel="noopener">📎 ${esc(file.name || 'مرفق')}</a>`).join('');
+            const embeds = (message.embeds || []).map(embed => `<div class="quoted"><strong>${esc(embed.title || 'Embed')}</strong>${embed.description ? `<div>${esc(embed.description).replace(/\n/g, '<br>')}</div>` : ''}${embed.url ? `<a href="${esc(embed.url)}" target="_blank" rel="noopener">فتح الرابط</a>` : ''}</div>`).join('');
+            return `<article class="message"><img class="avatar" src="${avatar}" alt=""><div class="message-body"><div class="meta"><strong>${author}</strong><span>${fmt(message.createdAt)}</span></div>${content ? `<div class="content">${content}</div>` : ''}${attachments}${embeds}</div></article>`;
+        }).join('');
+        const title = esc(ticket.ticketType || 'تذكرة دعم');
+        res.send(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>محتوى التكت · ${title}</title><style>
+:root{--bg:#313338;--panel:#2b2d31;--panel2:#1e1f22;--text:#dbdee1;--muted:#949ba4;--gold:#f4c24c;--line:#3f4147}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,"Cairo",sans-serif}.shell{max-width:1100px;margin:28px auto;background:var(--panel2);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 20px 70px #0008}.top{padding:24px 30px;background:linear-gradient(135deg,#202225,#2b2d31);border-bottom:1px solid var(--line)}.brand{color:var(--gold);font-weight:800;font-size:12px;letter-spacing:2px}.top h1{margin:10px 0 4px;font-size:25px}.top p{margin:0;color:var(--muted);font-size:13px}.info{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:18px 30px;background:#232428;border-bottom:1px solid var(--line)}.info div{background:#2b2d31;border-radius:9px;padding:12px}.info b{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}.info span{font-size:13px}.chat{padding:24px 30px}.message{display:flex;gap:13px;padding:11px 0;direction:rtl}.message:hover{background:#2b2d31;border-radius:8px}.avatar{width:40px;height:40px;border-radius:50%;object-fit:cover;flex:none}.message-body{min-width:0;flex:1}.meta{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}.meta strong{font-size:14px;color:#fff}.meta span{font-size:11px;color:var(--muted);direction:ltr}.content{font-size:14px;line-height:1.7;white-space:normal;overflow-wrap:anywhere}.attachment{display:inline-block;margin:8px 6px 0 0;background:#1e1f22;color:#00a8fc;padding:8px 10px;border-radius:6px;text-decoration:none;font-size:12px}.quoted{margin-top:8px;border-right:4px solid var(--gold);background:#1e1f22;padding:10px 12px;border-radius:5px;max-width:680px;color:#c9ccd1;line-height:1.6}.quoted strong{display:block;color:#fff;margin-bottom:3px}.quoted a{color:#00a8fc;font-size:12px}.empty{text-align:center;color:var(--muted);padding:70px}.footer{padding:14px 30px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;text-align:center}@media(max-width:700px){.shell{margin:0;border-radius:0;border-left:0;border-right:0}.info{grid-template-columns:1fr 1fr;padding:14px}.top,.chat,.footer{padding-left:16px;padding-right:16px}.message{gap:9px}.avatar{width:34px;height:34px}}
+</style></head><body><main class="shell"><header class="top"><div class="brand">VORTEX / TICKET TRANSCRIPT</div><h1>محتوى ${title}</h1><p>نسخة محفوظة من محادثة التكت بعد إغلاقها.</p></header><section class="info"><div><b>صاحب التكت</b><span>${esc(ticket.ownerName || ticket.ownerId)}</span></div><div><b>تم فتحه</b><span>${fmt(ticket.openedAt)}</span></div><div><b>تم إغلاقه</b><span>${fmt(ticket.closedAt)}</span></div><div><b>تم استلامه بواسطة</b><span>${esc(ticket.claimedByName || ticket.claimedBy || 'لم يتم الاستلام')}</span></div><div><b>وقت الاستلام</b><span>${ticket.claimedAt ? fmt(ticket.claimedAt) : 'لم يتم الاستلام'}</span></div><div><b>أغلقه</b><span>${esc(ticket.closedByName || ticket.closedBy || '—')}</span></div></section><section class="chat">${messageHtml || '<div class="empty">لا توجد رسائل محفوظة في هذا التكت.</div>'}</section><footer class="footer">تم إنشاء هذه الصفحة تلقائيًا بواسطة نظام التكت.</footer></main></body></html>`);
+    } catch (error) {
+        console.error('[Transcript Page Error]', error);
+        res.status(500).send('تعذر تحميل محتوى التكت.');
+    }
+});
 
 // ==========================================
 // 8. UI Helper Function
@@ -3519,6 +3564,8 @@ client.on('interactionCreate', async (interaction) => {
             if (selected === 'claim_ticket') {
                 if (!isAdmin) return interaction.reply({ content: 'فقط الإدارة يمكنهم استلام التكت.', ephemeral: true });
                 ticketData.claimedBy = interaction.user.id;
+                ticketData.claimedByName = interaction.user.globalName || interaction.user.username;
+                ticketData.claimedAt = new Date();
                 await ticketData.save();
                 return interaction.reply({ content: `تم استلام التكت بواسطة ${interaction.user}.`, ephemeral: false });
             }
@@ -3531,10 +3578,52 @@ client.on('interactionCreate', async (interaction) => {
 
             if (selected === 'close_ticket') {
                 if (!isAdmin && !isOwner) return interaction.reply({ content: 'ليس لديك صلاحية لإغلاق التكت.', ephemeral: true });
+                await interaction.deferReply({ ephemeral: false });
                 ticketData.closedAt = new Date();
                 ticketData.closedBy = interaction.user.id;
+                ticketData.closedByName = interaction.user.globalName || interaction.user.username;
+                const ownerUser = await client.users.fetch(ticketData.ownerId).catch(() => null);
+                const claimedUser = ticketData.claimedBy ? await client.users.fetch(ticketData.claimedBy).catch(() => null) : null;
+                ticketData.ownerName = ownerUser?.globalName || ownerUser?.username || ticketData.ownerId;
+                ticketData.claimedByName = claimedUser?.globalName || claimedUser?.username || ticketData.claimedByName || '';
+                const transcriptResult = await archiveTicketTranscript(ticketData, interaction.channel);
+                if (!transcriptResult.ok) {
+                    return interaction.editReply({ content: 'تعذر حفظ محتوى التكت، لذلك لم يتم حذف القناة. حاول مرة أخرى.' });
+                }
                 await ticketData.save();
-                await interaction.reply({ content: 'سيتم حذف التكت خلال 5 ثوان...', ephemeral: false });
+
+                const publicBaseUrl = (process.env.RENDER_EXTERNAL_URL || process.env.PUBLIC_URL || process.env.DASHBOARD_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, '');
+                const summaryEmbed = new EmbedBuilder()
+                    .setColor(0xd4af37)
+                    .setTitle('ملخص التكت المغلق')
+                    .setDescription(`تم إغلاق التكت **${interaction.channel.name}** بنجاح.`)
+                    .addFields(
+                        { name: 'صاحب التكت', value: `<@${ticketData.ownerId}>`, inline: true },
+                        { name: 'مستلم التكت', value: ticketData.claimedBy ? `<@${ticketData.claimedBy}>` : 'لم يتم استلامه', inline: true },
+                        { name: 'أغلق التكت', value: `<@${ticketData.closedBy}>`, inline: true },
+                        { name: 'وقت فتح التكت', value: formatTicketDate(ticketData.openedAt), inline: true },
+                        { name: 'وقت استلام التكت', value: ticketData.claimedAt ? formatTicketDate(ticketData.claimedAt) : 'لم يتم الاستلام', inline: true },
+                        { name: 'وقت الإغلاق', value: formatTicketDate(ticketData.closedAt), inline: true },
+                        { name: 'نوع التكت', value: ticketData.ticketType || 'تذكرة دعم', inline: true },
+                        { name: 'الطلب أو الاستفسار', value: String(ticketData.request || '—').slice(0, 1024) },
+                        { name: 'الكريديت', value: String(ticketData.credits || '—'), inline: true }
+                    )
+                    .setFooter({ text: 'VORTEX Tickets · تم حفظ محتوى التكت' })
+                    .setTimestamp(ticketData.closedAt);
+
+                const dmPayload = { embeds: [summaryEmbed] };
+                if (publicBaseUrl) {
+                    dmPayload.components = [new ActionRowBuilder().addComponents(
+                        new ButtonBuilder()
+                            .setLabel('رؤية محتوى التكت')
+                            .setStyle(ButtonStyle.Link)
+                            .setURL(`${publicBaseUrl}/ticket-transcript/${ticketData.transcriptToken}`)
+                    )];
+                }
+                const owner = await client.users.fetch(ticketData.ownerId).catch(() => null);
+                if (owner) await owner.send(dmPayload).catch(err => console.error('[Ticket DM Error]', err.message));
+
+                await interaction.editReply({ content: 'تم حفظ محتوى التكت وإرسال ملخصه لصاحب التكت. سيتم حذف القناة خلال 5 ثوانٍ.' });
                 setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
                 return;
             }
@@ -3820,6 +3909,44 @@ async function showTicketOpenModal(interaction, ticketType, sectionConfig = {}) 
         new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket_credits').setLabel('كم معك كريديت؟').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100))
     );
     return interaction.showModal(modal);
+}
+
+function formatTicketDate(value) {
+    if (!value) return '—';
+    return new Date(value).toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+async function archiveTicketTranscript(ticketData, channel) {
+    try {
+        const collected = [];
+        let before;
+        for (let page = 0; page < 100; page++) {
+            const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+            if (!batch?.size) break;
+            for (const message of batch.values()) {
+                collected.push({
+                    messageId: message.id,
+                    authorId: message.author?.id || '',
+                    authorName: message.author?.username || 'عضو',
+                    authorDisplayName: message.member?.displayName || message.author?.globalName || message.author?.username || 'عضو',
+                    avatarUrl: message.author?.displayAvatarURL?.({ extension: 'png', size: 128 }) || '',
+                    content: String(message.content || '').slice(0, 4000),
+                    createdAt: message.createdAt,
+                    attachments: [...message.attachments.values()].map(file => ({ name: file.name || 'مرفق', url: file.url })),
+                    embeds: message.embeds.map(embed => ({ title: embed.title || '', description: String(embed.description || '').slice(0, 4000), url: embed.url || '', color: embed.hexColor || '' }))
+                });
+            }
+            before = batch.last()?.id;
+            if (!before || batch.size < 100) break;
+        }
+        collected.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        ticketData.transcriptToken = crypto.randomBytes(24).toString('hex');
+        ticketData.transcriptMessages = collected;
+        return { ok: true, count: collected.length };
+    } catch (error) {
+        console.error('[Ticket Transcript Error]', error);
+        return { ok: false, error };
+    }
 }
 
 async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}, openingData = {}) {
