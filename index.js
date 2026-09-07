@@ -2134,6 +2134,38 @@ client.on('messageCreate', async (msg) => {if (!msg.guild || msg.author.bot) ret
     } catch (e) {}
 
 
+    // --- [ أمر تحكم داخل روم التكت ] ---
+    if (msg.content.trim() === 'تحكم') {
+        const ticketData = await TicketData.findOne({ guildId: msg.guild.id, channelId: msg.channel.id });
+        if (!ticketData) return;
+
+        const isTicketAdmin = msg.member.permissions.has(PermissionFlagsBits.Administrator)
+            || Boolean(ticketData.adminRole && msg.member.roles.cache.has(ticketData.adminRole));
+        if (!isTicketAdmin) return;
+
+        const controlMenu = new StringSelectMenuBuilder()
+            .setCustomId('ticket_control_menu')
+            .setPlaceholder('لوحة التحكم بالتكت')
+            .addOptions([
+                { label: 'استلام التكت', value: 'claim_ticket', description: 'استلام التكت للمعالجة' },
+                { label: 'إتمام عملية البيع', value: 'complete_sale', description: 'بدء التقييم وإتمام بيانات البيع' },
+                { label: 'اغلاق التكت', value: 'close_ticket', description: 'اغلاق وحذف التكت' },
+                { label: 'اضافة شخص', value: 'add_member', description: 'اضافة شخص للتكت' },
+                { label: 'ازالة شخص', value: 'remove_member', description: 'ازالة شخص من التكت' },
+                { label: 'استدعاء صاحب التكت', value: 'summon_member', description: 'استدعاء صاحب التكت' }
+            ]);
+
+        await msg.channel.send({
+            embeds: [new EmbedBuilder()
+                .setColor(0xd4af37)
+                .setTitle('لوحة تحكم التكت')
+                .setDescription('اختر الإجراء المطلوب من القائمة أدناه.')],
+            components: [new ActionRowBuilder().addComponents(controlMenu)]
+        });
+        return;
+    }
+
+
     // --- [ نظام الاقتراحات ] ---
     try {
         const sugCfg = await SuggestionConfig.findOne({ guildId: msg.guild.id, channelId: msg.channel.id });
