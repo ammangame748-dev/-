@@ -60,7 +60,16 @@ const TicketData = mongoose.model('TicketData', new mongoose.Schema({
     claimedBy: String,
     openedAt: Date,
     closedAt: Date,
-    closedBy: String
+    closedBy: String,
+    request: { type: String, default: '' },
+    credits: { type: String, default: '' },
+    rating: { type: Number, default: null },
+    ratingReason: { type: String, default: '' },
+    ratingNote: { type: String, default: '' },
+    soldProduct: { type: String, default: '' },
+    soldPrice: { type: String, default: '' },
+    ratingMessageId: { type: String, default: '' },
+    saleMessageId: { type: String, default: '' }
 }));
 
 const UserLevel = mongoose.model('UserLevel', new mongoose.Schema({
@@ -248,6 +257,7 @@ const TicketConfig = mongoose.model('TicketConfig', new mongoose.Schema({
     topImagePath: String,
     bottomImagePath: String,
     ticketCount: { type: Number, default: 0 },
+    evaluationChannelId: { type: String, default: '' },
     buttons: [{ label: String, emoji: String, adminRole: String, categoryId: String }],
     menuOptions: [{ label: String, emoji: String, adminRole: String, categoryId: String }]
 }));
@@ -312,6 +322,8 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ==========================================
 // 3. تعريف الـ Client
 // ==========================================
+const pendingTicketOpens = new Map();
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -1657,11 +1669,18 @@ app.get('/manage/:guildId/tickets', checkAuth, async (req, res) => {
                 </div>
             </div>
 
-            <label style="margin-top:16px;">قناة الإرسال (اختياري)</label>
+            <label style="margin-top:16px;">قناة إرسال بانل التذاكر (اختياري)</label>
             <select name="targetChannel">
                 <option value="">-- لا ترسل الآن --</option>
                 ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}"># ${c.name}</option>`).join('')}
             </select>
+
+            <label style="margin-top:16px;">قناة التقييمات</label>
+            <select name="evaluationChannelId" required>
+                <option value="">-- اختر قناة التقييمات --</option>
+                ${g.channels.cache.filter(c => c.type === 0).map(c => `<option value="${c.id}" ${s.evaluationChannelId === c.id ? 'selected' : ''}># ${c.name}</option>`).join('')}
+            </select>
+            <div style="color:var(--text-muted);font-size:11px;margin-top:6px;">سيتم إرسال التقييم النهائي وبيانات المنتج المباع إلى هذه القناة.</div>
             <button class="btn-save" style="margin-top:20px;">حفظ وإرسال</button>
         </div>
     </form>`;
@@ -1685,7 +1704,7 @@ app.post('/save/:guildId/tickets', checkAuth, upload.fields([{ name: 'topImage' 
             if (menuLabel) menuOptions.push({ label: menuLabel, emoji: menuEmoji || '', adminRole: b[`menu_role_${i}`] || '', categoryId: b[`menu_category_${i}`] || '' });
         }
 
-        let updateData = { title: b.title, description: b.description, color: b.color || '#d4af37', buttons, menuOptions };
+        let updateData = { title: b.title, description: b.description, color: b.color || '#d4af37', evaluationChannelId: b.evaluationChannelId || '', buttons, menuOptions };
         if (req.files?.topImage?.[0]) updateData.topImagePath = req.files.topImage[0].path;
         if (req.files?.bottomImage?.[0]) updateData.bottomImagePath = req.files.bottomImage[0].path;
 
@@ -3462,7 +3481,7 @@ client.on('interactionCreate', async (interaction) => {
 
             const tConfig = await TicketConfig.findOne({ guildId: interaction.guild.id });
             const adminRole = ticketData.adminRole;
-            const isAdmin = Boolean(adminRole && interaction.member.roles.cache.has(adminRole));
+            const isAdmin = Boolean(adminRole && interaction.member.roles.cache.has(adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
             const isOwner = ticketData.ownerId === interaction.user.id;
 
             if (selected === 'claim_ticket') {
@@ -3470,6 +3489,12 @@ client.on('interactionCreate', async (interaction) => {
                 ticketData.claimedBy = interaction.user.id;
                 await ticketData.save();
                 return interaction.reply({ content: `تم استلام التكت بواسطة ${interaction.user}.`, ephemeral: false });
+            }
+
+            if (selected === 'complete_sale') {
+                if (!isAdmin) return interaction.reply({ content: 'فقط الإدارة يمكنها إتمام عملية البيع.', ephemeral: true });
+                const stars = new ActionRowBuilder().addComponents([1, 2, 3, 4, 5].map(n => new ButtonBuilder().setCustomId(`ticket_rating:${n}`).setLabel(`${'★'.repeat(n)}${'☆'.repeat(5 - n)}`).setStyle(ButtonStyle.Secondary)));
+                return interaction.reply({ embeds: [new EmbedBuilder().setColor(0x808080).setTitle('تقييم عملية البيع').setDescription('يرجى من صاحب التكت اختيار التقييم بالنجوم.')], components: [stars] });
             }
 
             if (selected === 'close_ticket') {
@@ -3508,6 +3533,103 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         // --- [ Ticket Modals ] ---
+        // --- [ Ticket Sale Completion / Rating ] ---
+        if (interaction.isButton() && interaction.customId === 'ticket_complete_sale') {
+            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
+            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
+            const isAdmin = Boolean(ticketData.adminRole && interaction.member.roles.cache.has(ticketData.adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+            if (!isAdmin) return interaction.reply({ content: 'هذا الإجراء مخصص للإدارة فقط.', ephemeral: true });
+
+            const stars = new ActionRowBuilder().addComponents([1, 2, 3, 4, 5].map(n => new ButtonBuilder()
+                .setCustomId(`ticket_rating:${n}`)
+                .setLabel(`${'★'.repeat(n)}${'☆'.repeat(5 - n)}`)
+                .setStyle(ButtonStyle.Secondary)));
+            return interaction.reply({
+                embeds: [new EmbedBuilder().setColor(0x808080).setTitle('تقييم عملية البيع').setDescription('يرجى من صاحب التكت اختيار تقييم العملية من خلال النجوم.')],
+                components: [stars]
+            });
+        }
+
+        if (interaction.isButton() && interaction.customId.startsWith('ticket_rating:')) {
+            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
+            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
+            if (ticketData.ownerId !== interaction.user.id) return interaction.reply({ content: 'التقييم متاح لصاحب التكت فقط.', ephemeral: true });
+            const rating = Number(interaction.customId.split(':')[1]);
+            const modal = new ModalBuilder().setCustomId(`ticket_rating_modal:${rating}`).setTitle('إرسال تقييم عملية البيع');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('rating_reason').setLabel('لماذا اخترت هذا التقييم؟').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1000)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('rating_note').setLabel('ملاحظة').setStyle(TextInputStyle.Paragraph).setRequired(false).setMaxLength(1000))
+            );
+            return interaction.showModal(modal);
+        }
+
+        if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket_rating_modal:')) {
+            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
+            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
+            if (ticketData.ownerId !== interaction.user.id) return interaction.reply({ content: 'التقييم متاح لصاحب التكت فقط.', ephemeral: true });
+            ticketData.rating = Number(interaction.customId.split(':')[1]);
+            ticketData.ratingReason = interaction.fields.getTextInputValue('rating_reason').trim();
+            ticketData.ratingNote = interaction.fields.getTextInputValue('rating_note').trim();
+            await ticketData.save();
+            const saleEmbed = new EmbedBuilder().setColor(0x808080).setTitle('تم استلام تقييم العميل')
+                .setDescription(`العميل: <@${ticketData.ownerId}>\nالتقييم: ${'★'.repeat(ticketData.rating)}${'☆'.repeat(5 - ticketData.rating)}`)
+                .addFields({ name: 'سبب التقييم', value: ticketData.ratingReason || '—' }, { name: 'الملاحظة', value: ticketData.ratingNote || '—' })
+                .setTimestamp();
+            const productRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('ticket_product_modal').setLabel('اسم المنتج المباع').setStyle(ButtonStyle.Secondary));
+            const sent = await interaction.channel.send({ embeds: [saleEmbed], components: [productRow] });
+            ticketData.saleMessageId = sent.id;
+            await ticketData.save();
+            return interaction.reply({ content: 'تم إرسال التقييم للإدارة بنجاح.', ephemeral: true });
+        }
+
+        if (interaction.isButton() && interaction.customId === 'ticket_product_modal') {
+            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
+            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
+            const isAdmin = Boolean(ticketData.adminRole && interaction.member.roles.cache.has(ticketData.adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+            if (!isAdmin) return interaction.reply({ content: 'هذا الإجراء مخصص للإدارة فقط.', ephemeral: true });
+            const modal = new ModalBuilder().setCustomId('ticket_product_submit').setTitle('بيانات المنتج المباع');
+            modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sold_product').setLabel('اسم المنتج المباع').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(200)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('sold_price').setLabel('سعر المنتج المباع').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100))
+            );
+            return interaction.showModal(modal);
+        }
+
+        if (interaction.isModalSubmit() && interaction.customId === 'ticket_product_submit') {
+            const ticketData = await TicketData.findOne({ guildId: interaction.guild.id, channelId: interaction.channelId });
+            if (!ticketData) return interaction.reply({ content: 'لم يتم العثور على بيانات التكت.', ephemeral: true });
+            const isAdmin = Boolean(ticketData.adminRole && interaction.member.roles.cache.has(ticketData.adminRole)) || interaction.memberPermissions?.has(PermissionFlagsBits.Administrator);
+            if (!isAdmin) return interaction.reply({ content: 'هذا الإجراء مخصص للإدارة فقط.', ephemeral: true });
+            ticketData.soldProduct = interaction.fields.getTextInputValue('sold_product').trim();
+            ticketData.soldPrice = interaction.fields.getTextInputValue('sold_price').trim();
+            await ticketData.save();
+            const tConfig = await TicketConfig.findOne({ guildId: interaction.guild.id });
+            const evaluationChannel = tConfig?.evaluationChannelId ? await interaction.guild.channels.fetch(tConfig.evaluationChannelId).catch(() => null) : null;
+            if (!evaluationChannel?.isTextBased?.()) return interaction.reply({ content: 'تم حفظ بيانات المنتج، لكن قناة التقييمات غير مضبوطة من الداشبورد.', ephemeral: true });
+            const finalEmbed = new EmbedBuilder().setColor(0x808080).setTitle('تقييم عملية بيع جديدة')
+                .setDescription(`العميل: <@${ticketData.ownerId}>`)
+                .addFields(
+                    { name: 'التقييم', value: `${'★'.repeat(ticketData.rating || 0)}${'☆'.repeat(5 - (ticketData.rating || 0))}`, inline: true },
+                    { name: 'المنتج المباع', value: ticketData.soldProduct || '—', inline: true },
+                    { name: 'السعر', value: ticketData.soldPrice || '—', inline: true },
+                    { name: 'سبب التقييم', value: ticketData.ratingReason || '—' },
+                    { name: 'الملاحظة', value: ticketData.ratingNote || '—' }
+                ).setFooter({ text: `التكت: ${interaction.channel.name}` }).setTimestamp();
+            await evaluationChannel.send({ content: `<@${ticketData.ownerId}>`, embeds: [finalEmbed] });
+            return interaction.reply({ content: 'تم إرسال التقييم وبيانات المنتج إلى قناة التقييمات.', ephemeral: true });
+        }
+
+        if (interaction.isModalSubmit() && interaction.customId === 'ticket_open_modal') {
+            const pendingKey = `${interaction.guild.id}:${interaction.user.id}`;
+            const pending = pendingTicketOpens.get(pendingKey);
+            if (!pending) return interaction.reply({ content: 'انتهت جلسة فتح التكت، اضغط الزر مرة أخرى.', ephemeral: true });
+            pendingTicketOpens.delete(pendingKey);
+            const { ticketType, sectionConfig } = pending;
+            const request = interaction.fields.getTextInputValue('ticket_request').trim();
+            const credits = interaction.fields.getTextInputValue('ticket_credits').trim();
+            return openTicket(interaction, await TicketConfig.findOne({ guildId: interaction.guild.id }), ticketType, sectionConfig, { request, credits });
+        }
+
         if (interaction.isModalSubmit() && (interaction.customId === 'ticket_add_member' || interaction.customId === 'ticket_remove_member')) {
             const memberId = interaction.fields.getTextInputValue('member_id').trim();
             const member = await interaction.guild.members.fetch(memberId).catch(() => null);
@@ -3533,9 +3655,8 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
     const sectionConfig = tConfig.menuOptions?.[optIndex] || {};
     if (sectionConfig.label) ticketType = sectionConfig.label;
 
-    await openTicket(interaction, tConfig, ticketType, sectionConfig);
-    return;
-}
+            return showTicketOpenModal(interaction, ticketType, sectionConfig);
+        }
 
         // --- [ Ticket Buttons ] ---
         if (interaction.isButton() && (interaction.customId === 'open_ticket' || interaction.customId.startsWith('ticket_btn_'))) {
@@ -3549,7 +3670,7 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
                 sectionConfig = tConfig.buttons?.[btnIndex] || {};
                 if (sectionConfig.label) ticketType = sectionConfig.label;
             }
-            await openTicket(interaction, tConfig, ticketType, sectionConfig);
+            return showTicketOpenModal(interaction, ticketType, sectionConfig);
         }
         // --- [ Suggestion Menu ] ---
         if (interaction.isStringSelectMenu() && interaction.customId === 'suggestion_menu') {
@@ -3659,7 +3780,17 @@ if (interaction.isStringSelectMenu() && interaction.customId === 'ticket_menu') 
 // 13. Helper Functions
 // ==========================================
 
-async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) {
+async function showTicketOpenModal(interaction, ticketType, sectionConfig = {}) {
+    pendingTicketOpens.set(`${interaction.guild.id}:${interaction.user.id}`, { ticketType, sectionConfig });
+    const modal = new ModalBuilder().setCustomId('ticket_open_modal').setTitle('فتح تذكرة جديدة');
+    modal.addComponents(
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket_request').setLabel('ما هو طلبك أو استفسارك؟').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(1500)),
+        new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ticket_credits').setLabel('كم معك كريديت؟').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(100))
+    );
+    return interaction.showModal(modal);
+}
+
+async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}, openingData = {}) {
     try {
         const existingTicket = await TicketData.findOne({ guildId: interaction.guild.id, ownerId: interaction.user.id, closedAt: null });
         if (existingTicket) {
@@ -3695,13 +3826,16 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
             ticketType,
             adminRole: sectionConfig.adminRole || '',
             categoryId: sectionConfig.categoryId || '',
-            openedAt: new Date()
+            openedAt: new Date(),
+            request: openingData.request || '',
+            credits: openingData.credits || ''
         });
 
         const files = [];
         const embed = new EmbedBuilder()
             .setTitle(`تكت ${ticketType} | #${ticketCount}`)
-            .setDescription(`مرحباً ${interaction.user}!\n\nالإدارة ستتواصل معك قريباً. يرجى شرح مشكلتك بالتفصيل.`)
+            .setDescription(`مرحباً ${interaction.user}!\n\nالإدارة ستتواصل معك قريباً.`)
+            .addFields({ name: 'الطلب أو الاستفسار', value: openingData.request || '—' }, { name: 'الكريديت', value: openingData.credits || '—', inline: true })
             .setColor(0xd4af37)
             .addFields(
                 { name: 'صاحب التكت', value: `${interaction.user}`, inline: true },
@@ -3727,6 +3861,7 @@ async function openTicket(interaction, tConfig, ticketType, sectionConfig = {}) 
             .setPlaceholder('لوحة التحكم بالتكت')
             .addOptions([
                 { label: 'استلام التكت', value: 'claim_ticket', description: 'استلام التكت للمعالجة' },
+                { label: 'إتمام عملية البيع', value: 'complete_sale', description: 'بدء التقييم وإتمام بيانات البيع' },
                 { label: 'اغلاق التكت', value: 'close_ticket', description: 'اغلاق وحذف التكت' },
                 { label: 'اضافة شخص', value: 'add_member', description: 'اضافة شخص للتكت' },
                 { label: 'ازالة شخص', value: 'remove_member', description: 'ازالة شخص من التكت' },
