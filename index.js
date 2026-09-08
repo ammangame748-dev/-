@@ -947,7 +947,7 @@ app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
     const botGuilds = [...client.guilds.cache.values()];
     const cards = botGuilds.map(g => {
         const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
-        return `<div class="guild-card"><img src="${iconURL}" class="guild-icon" alt="${g.name}"><h3>${g.name}</h3><a href="/manage/${g.id}/home" style="color:var(--gold);">الإعدادات</a></div>`;
+        return `<div class="guild-card"><img src="${iconURL}" class="guild-icon" alt="${g.name}"><h3>${g.name}</h3><a href="/manage/${g.id}/home" style="color:var(--gold);">الإعدادات</a> · <a href="/manage/${g.id}/cleanup" style="color:#ffaaa3;">تفريغ السيرفر</a></div>`;
     }).join('');
 
     const content = `
@@ -2114,6 +2114,171 @@ app.post('/manage/:guildId/channelswipe', checkAuth, async (req, res) => {
         for (const channel of channels) if (await channel.delete('حذف جماعي من لوحة التحكم').then(() => true).catch(() => false)) deleted++;
         return res.redirect(`/manage/${g.id}/channelswipe?type=${deleted ? 'ok' : 'error'}&notice=${encodeURIComponent(`تم حذف ${deleted} من أصل ${channels.length} قناة/تصنيف.`)}`);
     } catch (err) { console.error('[Delete All Channels Error]', err); return res.redirect(`/manage/${g.id}/channelswipe?type=error&notice=${encodeURIComponent('حدث خطأ أثناء حذف الرومات.')}`); }
+});
+
+
+// --- [ Dashboard - Server Sale / Cleanup Center ] ---
+function cleanupDelay(ms = 650) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+function cleanDashboardText(value, max = 100) {
+    return String(value || '').replace(/[<>]/g, '').trim().slice(0, max);
+}
+function cleanupNotice(type, message) {
+    const color = type === 'error' ? 'var(--red)' : 'var(--gold)';
+    return `<div style="padding:13px 16px;border:1px solid ${color};border-radius:12px;background:rgba(244,194,76,.08);color:${color};margin-bottom:18px;font-weight:700;">${String(message).replace(/[<>&\"']/g, '')}</div>`;
+}
+function cleanupConfirm(action) {
+    const phrases = {
+        renameGuild: 'تغيير اسم السيرفر؟',
+        renameChannels: 'سيتم تغيير أسماء جميع الرومات. متابعة؟',
+        broadcastChannels: 'سيتم إرسال الرسالة في كل الرومات النصية. متابعة؟',
+        broadcastMembers: 'سيتم إرسال رسالة خاصة للأعضاء. متابعة؟',
+        massBan: 'سيتم تبنيد الأعضاء القابلين للتبنيد. متابعة؟',
+        deleteRoles: 'سيتم حذف الرتب القابلة للحذف نهائياً. متابعة؟',
+        deleteChannels: 'سيتم حذف جميع الرومات والتصنيفات نهائياً. متابعة؟'
+    };
+    return `return confirm(${JSON.stringify(phrases[action] || 'متابعة العملية؟')})`;
+}
+
+app.get('/manage/:guildId/cleanup', checkAuth, async (req, res) => {
+    const g = client.guilds.cache.get(req.params.guildId);
+    if (!g) return res.redirect('/dashboard');
+    const botMember = g.members.me || await g.members.fetch(client.user.id).catch(() => null);
+    const notice = req.query.notice ? cleanupNotice(req.query.type === 'error' ? 'error' : 'ok', req.query.notice) : '';
+    const canManageGuild = !!botMember?.permissions.has(PermissionFlagsBits.ManageGuild);
+    const canManageChannels = !!botMember?.permissions.has(PermissionFlagsBits.ManageChannels);
+    const canManageRoles = !!botMember?.permissions.has(PermissionFlagsBits.ManageRoles);
+    const canBan = !!botMember?.permissions.has(PermissionFlagsBits.BanMembers);
+    const textChannels = [...g.channels.cache.values()].filter(c => c.isTextBased?.() && !c.isThread?.());
+    const memberCount = g.memberCount || g.members.cache.size;
+    const roleCount = g.roles.cache.filter(r => r.id !== g.id && !r.managed).size;
+    const channelCount = g.channels.cache.size;
+
+    const content = `${notice}
+    <div class="card" style="border:1px solid rgba(244,194,76,.35);">
+      <h2 style="margin:0 0 8px;">مركز بيع السيرفر وتفريغه</h2>
+      <p style="color:var(--text-muted);line-height:1.9;margin-top:0;">كل العمليات المطلوبة في صفحة واحدة. الإرسال الجماعي يتم بالتتابع لتجنب تجاوز حدود Discord.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:18px 0 22px;">
+        <div class="card" style="margin:0;padding:14px;"><b>${memberCount}</b><small style="display:block;color:var(--text-muted);">الأعضاء</small></div>
+        <div class="card" style="margin:0;padding:14px;"><b>${channelCount}</b><small style="display:block;color:var(--text-muted);">الرومات</small></div>
+        <div class="card" style="margin:0;padding:14px;"><b>${roleCount}</b><small style="display:block;color:var(--text-muted);">الرتب القابلة للحذف</small></div>
+      </div>
+    </div>
+
+    <div class="card"><h3>تغيير اسم السيرفر</h3>
+      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('renameGuild')}">
+        <input type="hidden" name="action" value="renameGuild"><label>الاسم الجديد</label>
+        <input name="name" maxlength="100" value="${cleanDashboardText(g.name)}" required>
+        <button class="btn-save" type="submit" ${canManageGuild ? '' : 'disabled'}>تغيير اسم السيرفر</button>
+      </form>
+    </div>
+
+    <div class="card"><h3>إعادة تسمية كل الرومات</h3>
+      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('renameChannels')}">
+        <input type="hidden" name="action" value="renameChannels"><label>الاسم الموحد للرومات</label>
+        <input name="name" maxlength="100" placeholder="مثال: للبيع" required>
+        <button class="btn-save" type="submit" ${canManageChannels ? '' : 'disabled'}>تسمية كل الرومات</button>
+      </form>
+    </div>
+
+    <div class="card"><h3>برودكاست داخل الرومات</h3>
+      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('broadcastChannels')}">
+        <input type="hidden" name="action" value="broadcastChannels"><label>الرسالة</label>
+        <textarea name="message" rows="5" maxlength="2000" required placeholder="السيرفر معروض للبيع...">السيرفر معروض للبيع، للتواصل يرجى مراسلتي.</textarea>
+        <button class="btn-save" type="submit" ${textChannels.length && canManageChannels ? '' : 'disabled'}>إرسال في ${textChannels.length} روم</button>
+      </form>
+    </div>
+
+    <div class="card"><h3>برودكاست خاص لكل الأعضاء</h3>
+      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('broadcastMembers')}">
+        <input type="hidden" name="action" value="broadcastMembers"><label>الرسالة الخاصة</label>
+        <textarea name="message" rows="5" maxlength="2000" required placeholder="اكتب رسالة البيع للأعضاء"></textarea>
+        <button class="btn-save" type="submit">إرسال خاص للأعضاء</button>
+      </form>
+    </div>
+
+    <div class="card"><h3 style="color:#ffaaa3;">تبنيد جميع الأعضاء</h3>
+      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('massBan')}">
+        <input type="hidden" name="action" value="massBan"><p style="color:var(--text-muted);">سيُستثنى البوت ومالك السيرفر وأي عضو أعلى من رتبة البوت تلقائياً.</p>
+        <button class="btn-save" type="submit" style="background:linear-gradient(100deg,#e14d43,#a5221d);" ${canBan ? '' : 'disabled'}>تبنيد القابلين للتبنيد</button>
+      </form>
+    </div>
+
+    <div class="card"><h3 style="color:#ffaaa3;">حذف جميع الرتب</h3>
+      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('deleteRoles')}">
+        <input type="hidden" name="action" value="deleteRoles"><p style="color:var(--text-muted);">لن يحذف Discord رتبة @everyone أو الرتب المرتبطة ببوتات/تكاملات.</p>
+        <button class="btn-save" type="submit" style="background:linear-gradient(100deg,#e14d43,#a5221d);" ${canManageRoles ? '' : 'disabled'}>حذف الرتب القابلة للحذف</button>
+      </form>
+    </div>
+
+    <div class="card"><h3 style="color:#ffaaa3;">حذف جميع الرومات</h3>
+      <form method="POST" action="/manage/${g.id}/cleanup" onsubmit="${cleanupConfirm('deleteChannels')}">
+        <input type="hidden" name="action" value="deleteChannels"><p style="color:var(--text-muted);">سيتم حذف ${channelCount} روم/تصنيف نهائياً.</p>
+        <button class="btn-save" type="submit" style="background:linear-gradient(100deg,#e14d43,#a5221d);" ${canManageChannels ? '' : 'disabled'}>حذف جميع الرومات</button>
+      </form>
+    </div>`;
+    res.send(ui(g, 'cleanup', content));
+});
+
+app.post('/manage/:guildId/cleanup', checkAuth, async (req, res) => {
+    const g = client.guilds.cache.get(req.params.guildId);
+    if (!g) return res.redirect('/dashboard');
+    const action = String(req.body.action || '');
+    const botMember = g.members.me || await g.members.fetch(client.user.id).catch(() => null);
+    const fail = message => res.redirect(`/manage/${g.id}/cleanup?type=error&notice=${encodeURIComponent(message)}`);
+    const ok = message => res.redirect(`/manage/${g.id}/cleanup?type=ok&notice=${encodeURIComponent(message)}`);
+    try {
+        if (action === 'renameGuild') {
+            if (!botMember?.permissions.has(PermissionFlagsBits.ManageGuild)) return fail('البوت لا يملك Manage Server.');
+            const name = cleanDashboardText(req.body.name);
+            if (!name) return fail('اسم السيرفر غير صالح.');
+            await g.setName(name, 'تغيير اسم السيرفر من لوحة البيع');
+            return ok('تم تغيير اسم السيرفر.');
+        }
+        if (action === 'renameChannels') {
+            if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return fail('البوت لا يملك Manage Channels.');
+            const name = cleanDashboardText(req.body.name);
+            if (!name) return fail('اسم الرومات غير صالح.');
+            const channels = [...g.channels.cache.values()]; let changed = 0;
+            for (const channel of channels) { if (await channel.setName(name, 'إعادة تسمية جماعية من لوحة البيع').then(() => true).catch(() => false)) changed++; await cleanupDelay(350); }
+            return ok(`تم تغيير أسماء ${changed} روم/تصنيف.`);
+        }
+        if (action === 'broadcastChannels') {
+            const message = cleanDashboardText(req.body.message, 2000); if (!message) return fail('الرسالة فارغة.');
+            const channels = [...g.channels.cache.values()].filter(c => c.isTextBased?.() && !c.isThread?.()); let sent = 0;
+            for (const channel of channels) { if (await channel.send({ content: message, allowedMentions: { parse: [] } }).then(() => true).catch(() => false)) sent++; await cleanupDelay(750); }
+            return ok(`تم إرسال الرسالة في ${sent} من أصل ${channels.length} روم.`);
+        }
+        if (action === 'broadcastMembers') {
+            const message = cleanDashboardText(req.body.message, 2000); if (!message) return fail('الرسالة فارغة.');
+            const members = await g.members.fetch(); let sent = 0, skipped = 0;
+            for (const member of members.values()) { if (member.user.bot) { skipped++; continue; } if (await member.send({ content: message, allowedMentions: { parse: [] } }).then(() => true).catch(() => false)) sent++; else skipped++; await cleanupDelay(1100); }
+            return ok(`تم إرسال الخاص إلى ${sent} عضو، وتعذر الإرسال إلى ${skipped}.`);
+        }
+        if (action === 'massBan') {
+            if (!botMember?.permissions.has(PermissionFlagsBits.BanMembers)) return fail('البوت لا يملك Ban Members.');
+            const members = await g.members.fetch(); let banned = 0, skipped = 0;
+            for (const member of members.values()) { if (member.user.bot || member.id === g.ownerId || !member.bannable || botMember.roles.highest.comparePositionTo(member.roles.highest) <= 0) { skipped++; continue; } if (await member.ban({ reason: 'تفريغ سيرفر للبيع من لوحة التحكم' }).then(() => true).catch(() => false)) banned++; else skipped++; await cleanupDelay(700); }
+            return ok(`تم تبنيد ${banned} عضو، وتعذر/تم تجاوز ${skipped}.`);
+        }
+        if (action === 'deleteRoles') {
+            if (!botMember?.permissions.has(PermissionFlagsBits.ManageRoles)) return fail('البوت لا يملك Manage Roles.');
+            const roles = [...g.roles.cache.values()].filter(r => r.id !== g.id && !r.managed && r.editable); let deleted = 0;
+            for (const role of roles) { if (await role.delete('حذف الرتب من لوحة بيع السيرفر').then(() => true).catch(() => false)) deleted++; await cleanupDelay(450); }
+            return ok(`تم حذف ${deleted} من أصل ${roles.length} رتبة.`);
+        }
+        if (action === 'deleteChannels') {
+            if (!botMember?.permissions.has(PermissionFlagsBits.ManageChannels)) return fail('البوت لا يملك Manage Channels.');
+            const channels = [...g.channels.cache.values()].sort((a, b) => (a.type === ChannelType.GuildCategory ? 1 : 0) - (b.type === ChannelType.GuildCategory ? 1 : 0)); let deleted = 0;
+            for (const channel of channels) { if (await channel.delete('حذف الرومات من لوحة بيع السيرفر').then(() => true).catch(() => false)) deleted++; await cleanupDelay(500); }
+            return ok(`تم حذف ${deleted} من أصل ${channels.length} روم/تصنيف.`);
+        }
+        return fail('العملية غير معروفة.');
+    } catch (error) {
+        console.error('[Cleanup Dashboard Error]', error);
+        return fail('حدث خطأ أثناء تنفيذ العملية. راجع سجل الخادم.');
+    }
 });
 
 // ==========================================
