@@ -837,7 +837,8 @@ function ui(guild, active, content) {
         ['mod', 'الإشراف', `/manage/${guildId}/mod`, '<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'],
         ['massban', 'تبنيد الأشخاص', `/manage/${guildId}/massban`, '<path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6z"/><path d="M8 12h8"/>'],
         ['channelswipe', 'حذف جميع الرومات', `/manage/${guildId}/channelswipe`, '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>'],
-        ['poetry', 'الشعر العراقي', `/manage/${guildId}/poetry`, '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>']
+        ['poetry', 'الشعر العراقي', `/manage/${guildId}/poetry`, '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>'],
+        ['cleanup', 'تفريغ السيرفر', `/manage/${guildId}/cleanup`, '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 14h10l1-14M9 7V4h6v3"/>']
     ] : [];
     const navHtml = nav.map(([key, label, href, path]) => `<a class="rail-link ${active === key ? 'is-active' : ''}" href="${href}" aria-current="${active === key ? 'page' : 'false'}"><svg viewBox="0 0 24 24" aria-hidden="true">${path}</svg><span>${label}</span><i></i></a>`).join('');
     return `<!doctype html>
@@ -947,7 +948,7 @@ app.get('/dashboard', checkAuth, checkDashboardOwner, (req, res) => {
     const botGuilds = [...client.guilds.cache.values()];
     const cards = botGuilds.map(g => {
         const iconURL = g.iconURL({ extension: 'png', size: 256 }) || 'https://cdn.discordapp.com/embed/avatars/0.png';
-        return `<div class="guild-card"><img src="${iconURL}" class="guild-icon" alt="${g.name}"><h3>${g.name}</h3><a href="/manage/${g.id}/home" style="color:var(--gold);">الإعدادات</a> · <a href="/manage/${g.id}/cleanup" style="color:#ffaaa3;">تفريغ السيرفر</a></div>`;
+        return `<div class="guild-card"><img src="${iconURL}" class="guild-icon" alt="${g.name}"><h3>${g.name}</h3><a href="/manage/${g.id}/home" style="color:var(--gold);">الإعدادات</a></div>`;
     }).join('');
 
     const content = `
